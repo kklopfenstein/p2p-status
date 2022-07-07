@@ -1,3 +1,8 @@
+use std::collections::HashSet;
+use std::env;
+use std::fmt::Display;
+
+use clap::Parser;
 use libp2p::{
     core::upgrade,
     floodsub::{Floodsub, FloodsubEvent, Topic},
@@ -5,16 +10,19 @@ use libp2p::{
     identity,
     mdns::{Mdns, MdnsEvent},
     mplex,
+    NetworkBehaviour,
     noise::{Keypair, NoiseConfig, X25519Spec},
-    swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder},
-    tcp::TokioTcpConfig,
-    NetworkBehaviour, PeerId, Transport,
+    PeerId,
+    swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder}, tcp::TokioTcpConfig, Transport,
 };
 use log::{error, info};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use tokio::{fs, io::AsyncBufReadExt, sync::mpsc};
+
+use p2p::behaviors::peer_status::PeerStatusBehaviour;
+use p2p::requests::list_request::{PeerListMode, PeerListRequest};
+use p2p::responses::list_response::ListEventType;
 
 const STORAGE_FILE_PATH: &str = "./recipes.json";
 
@@ -24,6 +32,12 @@ type Recipes = Vec<Recipe>;
 static KEYS: Lazy<identity::Keypair> = Lazy::new(|| identity::Keypair::generate_ed25519());
 static PEER_ID: Lazy<PeerId> = Lazy::new(|| PeerId::from(KEYS.public()));
 static TOPIC: Lazy<Topic> = Lazy::new(|| Topic::new("recipes"));
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(short, long, value_parser, default_value = "")]
+    description: String
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Recipe {
@@ -199,12 +213,17 @@ async fn main() {
         .multiplex(mplex::MplexConfig::new())
         .boxed();
 
-    let mut behaviour = RecipeBehaviour {
+    let args = Args::parse();
+    info!("Description: {}", args.description);
+
+    let mut behaviour = PeerStatusBehaviour {
         floodsub: Floodsub::new(PEER_ID.clone()),
         mdns: Mdns::new(Default::default())
             .await
             .expect("can create mdns"),
         response_sender,
+        description: args.description,
+        peer_id: format!("{}", *PEER_ID)
     };
 
     behaviour.floodsub.subscribe(TOPIC.clone());
@@ -228,8 +247,8 @@ async fn main() {
     loop {
         let evt = {
             tokio::select! {
-                line = stdin.next_line() => Some(EventType::Input(line.expect("can get line").expect("can read line from stdin"))),
-                response = response_rcv.recv() => Some(EventType::Response(response.expect("response exists"))),
+                line = stdin.next_line() => Some(ListEventType::Input(line.expect("can get line").expect("can read line from stdin"))),
+                response = response_rcv.recv() => Some(ListEventType::Response(response.expect("response exists"))),
                 event = swarm.select_next_some() => {
                     info!("Unhandled Swarm Event: {:?}", event);
                     None
@@ -239,18 +258,19 @@ async fn main() {
 
         if let Some(event) = evt {
             match event {
-                EventType::Response(resp) => {
+                ListEventType::Response(resp) => {
+                    info!("Received response!");
                     let json = serde_json::to_string(&resp).expect("can jsonify response");
                     swarm
                         .behaviour_mut()
                         .floodsub
                         .publish(TOPIC.clone(), json.as_bytes());
                 }
-                EventType::Input(line) => match line.as_str() {
+                ListEventType::Input(line) => match line.as_str() {
                     "ls p" => handle_list_peers(&mut swarm).await,
-                    cmd if cmd.starts_with("ls r") => handle_list_recipes(cmd, &mut swarm).await,
-                    cmd if cmd.starts_with("create r") => handle_create_recipe(cmd).await,
-                    cmd if cmd.starts_with("publish r") => handle_publish_recipe(cmd).await,
+                    cmd if cmd.starts_with("ls r") => handle_list_peer_statuses(cmd, &mut swarm).await,
+                    // cmd if cmd.starts_with("create r") => handle_create_recipe(cmd).await,
+                    // cmd if cmd.starts_with("publish r") => handle_publish_recipe(cmd).await,
                     _ => error!("unknown command"),
                 },
             }
@@ -258,7 +278,7 @@ async fn main() {
     }
 }
 
-async fn handle_list_peers(swarm: &mut Swarm<RecipeBehaviour>) {
+async fn handle_list_peers(swarm: &mut Swarm<PeerStatusBehaviour>) {
     info!("Discovered Peers:");
     let nodes = swarm.behaviour().mdns.discovered_nodes();
     let mut unique_peers = HashSet::new();
@@ -266,6 +286,36 @@ async fn handle_list_peers(swarm: &mut Swarm<RecipeBehaviour>) {
         unique_peers.insert(peer);
     }
     unique_peers.iter().for_each(|p| info!("{}", p));
+}
+
+async fn handle_list_peer_statuses(cmd: &str, swarm: &mut Swarm<PeerStatusBehaviour>) {
+    let rest = cmd.strip_prefix("ls r ");
+    match rest {
+        Some("all") => {
+            info!("making request for all");
+            let req = PeerListRequest {
+                mode: PeerListMode::ALL
+            };
+            let json = serde_json::to_string(&req).expect("can jsonify request");
+            swarm
+                .behaviour_mut()
+                .floodsub
+                .publish(TOPIC.clone(), json.as_bytes());
+        }
+        Some(recipes_peer_id) => {
+            let req = ListRequest {
+                mode: ListMode::One(recipes_peer_id.to_owned()),
+            };
+            let json = serde_json::to_string(&req).expect("can jsonify request");
+            swarm
+                .behaviour_mut()
+                .floodsub
+                .publish(TOPIC.clone(), json.as_bytes());
+        }
+        None => {
+            info!("No peers found.");
+        }
+    };
 }
 
 async fn handle_list_recipes(cmd: &str, swarm: &mut Swarm<RecipeBehaviour>) {
