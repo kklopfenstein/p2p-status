@@ -5,6 +5,7 @@ use libp2p::NetworkBehaviour;
 use log::{error, info};
 use tokio::sync::mpsc;
 use crate::models::peer::Peer;
+use crate::requests::message_request::MessageRequest;
 use gethostname::gethostname;
 
 use crate::requests::list_request::{PeerListMode, PeerListRequest};
@@ -31,7 +32,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for PeerStatusBehaviour {
                     info!("Got a ListResponse");
                     if resp.receiver == self.peer_id.to_string() {
                         info!("Response from {}:", msg.source);
-                        info!("{:?}", resp.data);
+                        println!("{:?}", resp.data);
                     } else {
                         info!("Wasn't our ListResponse. Our id is {} and the receiver was {}", self.peer_id.to_string(), resp.receiver);
                     }
@@ -59,6 +60,9 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for PeerStatusBehaviour {
                             }
                         }
                     }
+                } else if let Ok(req) = serde_json::from_slice::<MessageRequest>(&msg.data) {
+                    info!("Got a MessageRequest");
+                    println!("{}: {}", req.hostname, req.message);
                 }
             }
             _ => (),
