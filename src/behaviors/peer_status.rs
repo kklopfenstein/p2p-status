@@ -33,6 +33,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for PeerStatusBehaviour {
                     if resp.receiver == self.peer_id.to_string() {
                         info!("Response from {}:", msg.source);
                         println!("{:?}", resp.data);
+                        self.response_sender.send(resp).expect("ListResponse to be sent");
                     } else {
                         info!("Wasn't our ListResponse. Our id is {} and the receiver was {}", self.peer_id.to_string(), resp.receiver);
                     }

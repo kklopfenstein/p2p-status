@@ -13,5 +13,4 @@ pub struct ListResponse {
 
 pub enum ListEventType {
     Response(ListResponse),
-    Input(String),
 }

@@ -1,0 +1,51 @@
+<html>
+  <head>
+    <title>Test</title>
+
+    <script>
+      const adminPort = $ADMIN_PORT;
+      console.log('fetching data from http://localhost:' + adminPort);
+
+      function updateConsole(data) { 
+        const consoleDiv = document.getElementById('Console');
+        const html = [];
+        html.push('<ul>');
+        data.map((peer) => { html.push(`<li>Id: ${peer.id}, Hostname: ${peer.hostname}, Description: ${peer.description}</li>`)});
+        html.push('</ul>');
+        consoleDiv.innerHTML = html.join('\n');
+      }
+
+      function update() {
+        fetch('http://localhost:' + adminPort + '/api/events')
+          .then(response => response.json())
+          .then(updateConsole);
+      }
+
+      function sendPs() {
+        fetch('http://localhost:' + adminPort + '/api/send_ps', { method: 'POST'})
+          .then(response => response.json());
+      }
+      (() => {
+
+        setInterval(update, 5000);
+      })();
+    </script>
+
+    <style>
+      body {
+        font-family: arial;
+      }
+
+      ul {
+        list-style: none;
+        padding-left: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="Console">
+
+    </div>
+    <p><button type="button" onClick="sendPs()"/>Get Peer Info</p>
+  </body>
+</html>
